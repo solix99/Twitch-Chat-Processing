@@ -1,17 +1,14 @@
-// Twitch VOD Highlights.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
-
-#define INTERVAL_DURATION 10;
-#define HIGHLIGHT_STRENGTH_FACTOR 2;
+#define INTERVAL_DURATION 10
+#define HIGHLIGHT_STRENGTH_FACTOR 2
 
 #include <iostream>
 #include <string>
 #include <fstream>
-#include <cstdio>
 #include <vector>
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <unordered_map>
 
 using namespace std;
 
@@ -28,118 +25,83 @@ string secondsToTime(int totalSeconds) {
     return ss.str();
 }
 
-inline bool exists_test0(const std::string& name) {
-    ifstream f(name.c_str());
-    return f.good();
-}
+struct YourHashFunction {
+    size_t operator()(const string& str) const {
+        size_t hash = 0;
+        for (const char c : str) {
+            hash = (hash * 131) + c; // Modify the prime number as needed
+        }
+        return hash;
+    }
+};
 
 int main()
 {
-    long long hours, minutes, seconds;
-    vector<double> intervals;
-    double messageCount{ 0 };
-    double totalSeconds{ 0 };
-    double intervalIndex{ 0 };
-    double numIntervals{ 0 };
-    double intervalStart{ 0 };
-    double intervalEnd{ 0 };
-    double currentInterval{ 0 };
-    vector<int> messageCounts;
-    vector<double> secondsList; // list of seconds in each message
-    vector<string> messages;
-    string line, fileName;
-    stringstream fileDirectory{};
-    ifstream inFile;
-    int dec, intervalsShown{0};
-    string searchMessage{""};
-    string message{""};
-
+    string fileName, line;
     double HSF = HIGHLIGHT_STRENGTH_FACTOR;
     double intervalDuration = INTERVAL_DURATION;
 
     while (true)
     {
-        secondsList.clear();
-        searchMessage = "0";
+        string searchMessage;
+        int dec, intervalsShown;
 
-        cout << "1-Message frequency search" << endl;
-        cout << "2-Exact message search" << endl;
+       // cout << "1-Message frequency search" << endl;
+       // cout << "2-Exact message search" << endl;
+       // cin >> dec;
 
-        cin >> dec;
+        dec = 1;
 
         if (dec == 1)
         {
-            cout << "Enter VOD ID , highlight strength factor, and interval duration: ";
+            cout << "Enter VOD ID, highlight strength factor, and interval duration: ";
             cin >> fileName >> HSF >> intervalDuration;
         }
-        else if (dec == 2)
+        else if (dec == 0)
         {
-            cout << "Enter VOD ID , interval duration, exact message, intervals shown: ";
+            cout << "Enter VOD ID, interval duration, exact message, intervals shown: ";
             cin >> fileName >> intervalDuration >> searchMessage >> intervalsShown;
         }
 
+        string fileDirectory = fileName + ".txt";
+        ifstream inFile(fileDirectory);
 
-        fileDirectory.str("");
-        fileDirectory << fileName << ".txt";
-
-        if (!exists_test0(fileDirectory.str()))
+        if (!inFile)
         {
-            ofstream batch_file;
-            batch_file.open("commands.cmd", ios::trunc);
-            batch_file << "TwitchDownloaderCLI.exe chatdownload --id " << fileName << " -o " << fileName <<".txt" << endl;
-            batch_file.close();
-
-            cout << endl << batch_file._Stdstr;
-
-            int batch_exit_code = system("cmd.exe /c commands.cmd"); // blocks until the child process is terminated
-            if (batch_exit_code != 0) {
-                cout << "Batch file exited with code " << batch_exit_code << endl;
-            }
-
-            remove("commands.cmd"); // delete the batch file
+            cout << "File not found." << endl;
+            continue;
         }
 
-        inFile.open(fileDirectory.str());
         getline(inFile, line);
-
-        // Remove the first character from the input string
         line = line.substr(3);
+
+        vector<double> secondsList;
+        vector<string> messages;
+        int hours, minutes, seconds;
 
         while (getline(inFile, line))
         {
             int result = sscanf_s(line.c_str(), "[%lld:%lld:%lld]", &hours, &minutes, &seconds);
-            if (result != 3)
-            {
-                cout << "Error: could not parse timestamp" << endl;
-                cout << "Input string: " << line << endl;
-                cout << "Format string: [%lld:%lld:%lld]" << endl;
-            }
+            size_t pos1 = line.find(' ') + 1;
+            size_t pos2 = line.find(':', pos1);
+            string username = line.substr(pos1, pos2 - pos1);
+            string message = line.substr(pos2 + 2);
+            transform(message.begin(), message.end(), message.begin(), ::tolower);
+            double totalSeconds = hours * 3600 + minutes * 60 + seconds;
 
-            string username;
-            size_t pos1 = line.find(' ') + 1; // position of first space after timestamp
-            size_t pos2 = line.find(':', pos1); // position of colon after username
-            username = line.substr(pos1, pos2 - pos1);
-            message = line.substr(pos2 + 2); // position of first character of message
-            std::transform(message.begin(), message.end(), message.begin(), ::tolower);
-
-            totalSeconds = hours * 3600 + minutes * 60 + seconds;
-            intervalIndex = totalSeconds / INTERVAL_DURATION;
-            if (intervalIndex >= intervals.size())
-            {
-                intervals.resize(intervalIndex + 1);
-            }
-            intervals[intervalIndex]++;
-            messageCount++;
-
-            messages.push_back(message);
-            secondsList.push_back(hours * 3600 + minutes * 60 + seconds);
+            secondsList.push_back(totalSeconds);
+            messages.push_back(move(message));
         }
 
-        // Create arrays that hold the frequency of messages in intervals
         int numMessages = secondsList.size();
-        numIntervals = ceil(secondsList.back() / (double)intervalDuration);
+        int numIntervals = ceil(secondsList.back() / intervalDuration);
         vector<int> messageFrequency(numIntervals, 0);
-        currentInterval = 0;
+        vector<string> mostUsedPhrase(numIntervals);
+        vector<int> phraseCount(numIntervals);
+        vector<unordered_map<string, int, YourHashFunction>> intervalPhraseCounts(numIntervals);
+
+        int currentInterval = 0;
+
         for (int i = 0; i < numMessages; i++)
         {
             if (secondsList[i] >= (currentInterval + 1) * intervalDuration)
@@ -147,43 +109,49 @@ int main()
                 currentInterval++;
             }
             messageFrequency[currentInterval]++;
-        }
 
-        // Convert searchMessage to lowercase
-        std::transform(searchMessage.begin(), searchMessage.end(), searchMessage.begin(), ::tolower);
+            string currentPhrase = messages[i];
+
+            auto& phraseCountMap = intervalPhraseCounts[currentInterval];
+            istringstream iss(currentPhrase);
+            string word;
+            while (iss >> word)
+            {
+                phraseCountMap[word]++;
+            }
+
+            int currentPhraseCount = phraseCountMap[currentPhrase];
+            int& mostUsedPhraseCount = phraseCount[currentInterval];
+
+            if (currentPhraseCount > mostUsedPhraseCount)
+            {
+                mostUsedPhraseCount = currentPhraseCount;
+                mostUsedPhrase[currentInterval] = currentPhrase;
+            }
+        }
 
         inFile.close();
 
         if (dec == 1)
         {
-            // Calculate average message frequency across all timestamps
             int numMessages = secondsList.size();
-            double averageFrequency = numMessages / (double)secondsList.back();
-            cout << "Average message frequency: " << averageFrequency * intervalDuration << " messages per interval" << endl;
+            double averageFrequency = numMessages / secondsList.back();
 
-            // Print the frequency of messages in each interval
             for (int i = 0; i < numIntervals; i++)
             {
-                intervalStart = i * intervalDuration;
-                intervalEnd = min((i + 1) * intervalDuration - 1, secondsList.back());
-                //cout << "Interval [" << intervalStart << "s - " << intervalEnd << "s]: " << messageFrequency[i] << " messages" << endl;
+                double intervalStart = i * intervalDuration;
+                double intervalEnd = min((i + 1) * intervalDuration - 1, secondsList.back());
 
                 if (messageFrequency[i] > (averageFrequency * intervalDuration) * HSF)
                 {
-                    cout << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages" << endl;
+                    cout << endl << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages " << mostUsedPhrase[i].substr(0, 10) << "[" << phraseCount[i] << "]" << endl;
                 }
-
             }
         }
-        if (dec == 2)
+        else if (dec == 0)
         {
-            int numMessages = secondsList.size();
-            numIntervals = ceil(secondsList.back() / (double)intervalDuration);
-
-            // Vector to store intervals and their corresponding message counts
             vector<pair<pair<int, int>, int>> intervalCounts;
 
-            // Check each interval for the search message and keep count
             for (int i = 0; i < numIntervals; i++)
             {
                 int intervalStart = i * intervalDuration;
@@ -194,14 +162,13 @@ int main()
                 {
                     if (secondsList[j] >= intervalStart && secondsList[j] <= intervalEnd)
                     {
-                        std::string lowerMessage = messages[j];
-                        std::transform(lowerMessage.begin(), lowerMessage.end(), lowerMessage.begin(), ::tolower);
-
-                        std::string lowerSearchMessage = searchMessage;
-                        std::transform(lowerSearchMessage.begin(), lowerSearchMessage.end(), lowerSearchMessage.begin(), ::tolower);
-
+                        string lowerMessage = messages[j];
+                        transform(lowerMessage.begin(), lowerMessage.end(), lowerMessage.begin(), ::tolower);
+                        string lowerSearchMessage = searchMessage;
+                        transform(lowerSearchMessage.begin(), lowerSearchMessage.end(), lowerSearchMessage.begin(), ::tolower);
                         size_t pos = lowerMessage.find(lowerSearchMessage, 0);
-                        while (pos != std::string::npos)
+
+                        while (pos != string::npos)
                         {
                             messageCount++;
                             pos = lowerMessage.find(lowerSearchMessage, pos + 1);
@@ -212,12 +179,10 @@ int main()
                 intervalCounts.push_back(make_pair(make_pair(intervalStart, intervalEnd), messageCount));
             }
 
-            // Sort the intervalCounts vector in descending order based on message count
             sort(intervalCounts.begin(), intervalCounts.end(), [](const auto& lhs, const auto& rhs) {
                 return lhs.second > rhs.second;
                 });
 
-            // Print the desired number of intervals from the sorted vector
             int intervalsPrinted = 0;
             for (const auto& intervalCount : intervalCounts)
             {
@@ -228,7 +193,14 @@ int main()
                 }
             }
         }
+
+        messages.clear();
+        secondsList.clear();
+        messageFrequency.clear();
+        mostUsedPhrase.clear();
+        phraseCount.clear();
+        intervalPhraseCounts.clear();
     }
-	return 0;
+
+    return 0;
 }
-        
