@@ -81,15 +81,12 @@ int main()
     string message{ "" };
     vector<string> mostUsedPhrase;
     char func;
+    double compareIntervalDuration = 3600;
 
     double HSF = HIGHLIGHT_STRENGTH_FACTOR;
     double intervalDuration = INTERVAL_DURATION;
 
-    fstream sFile("settings.txt",ios::in);
-    sFile >> HSF >> intervalDuration;
-    sFile.close();
-
-    cout << endl << "s - search phrase, d - default values from settings.txt, c - custom values:" << endl <<endl;
+    cout << endl << "s - search phrase, d - default values from settings.txt, h - defaults with a compareInterval value of 1 hour , c - custom values:" << endl <<endl;
 
     while (true)
     {
@@ -102,6 +99,12 @@ int main()
         {
             cin >> HSF >> intervalDuration;
         }
+        else if (func == 'd' || func == 'h')
+        {
+			fstream sFile("settings.txt", ios::in);
+			sFile >> HSF >> intervalDuration;
+			sFile.close();
+		}
 
         fileDirectory.str("");
         fileDirectory << fileName << ".txt";
@@ -142,7 +145,7 @@ int main()
 
             // Calculate total seconds and interval index
             totalSeconds = hours * 3600 + minutes * 60 + seconds;
-            intervalIndex = totalSeconds / INTERVAL_DURATION;
+            intervalIndex = totalSeconds / intervalDuration;
 
             // Update interval count
             if (intervalIndex >= intervals.size())
@@ -161,11 +164,11 @@ int main()
         inFile.close();
 
         currentInterval = 0;
-
+        int currentCompareInterval = 0;
         int x = 10; // Number of top phrases to save
         int numMessages = secondsList.size();
         double averageFrequency = numMessages / (double)secondsList.back();
-        numIntervals = (numMessages + intervalDuration - 1) / intervalDuration;
+        numIntervals = (numMessages*3 + intervalDuration - 1) / intervalDuration;
         int errorIndex = -1;
         vector<string> mostUsedPhrase(numIntervals);
         vector<int> messageFrequency(numIntervals, 0);
@@ -173,10 +176,12 @@ int main()
         vector<unordered_map<string, int, YourHashFunction>> intervalPhraseCounts(numIntervals);
         unordered_map<string, int> phraseCountInterval; // Map to store phrase count within the interval
         vector<vector<string>> topPhrases(numIntervals); // Vector to store top X phrases for each interval
+        vector<int> compareInterval;
+        compareInterval.resize((totalSeconds/ compareIntervalDuration) * 10);
 
         cout << "Average message frequency: " << averageFrequency * intervalDuration << " messages per interval" << endl;
 
-        if (func == 'c' || func == 'd')
+        if (func == 'c' || func == 'd' || func == 'h')
         {
             try {
 
@@ -192,7 +197,12 @@ int main()
                             throw std::out_of_range("Vector out of range error: Current Interval exceeds vector sizes");
                         }
                     }
+                    if (secondsList[i] >= (currentCompareInterval + 1) * compareIntervalDuration)
+                    {
+                        currentCompareInterval++;
+                    }
                     messageFrequency[currentInterval]++;
+                    compareInterval[currentCompareInterval]++;
 
                     string currentPhrase = messages[i];
 
@@ -268,24 +278,37 @@ int main()
             inFile.close();
 
             int previousHour = -1; // Initialize with an invalid hour
+            double compareValue = 0;
 
             for (int i = 0; i < numIntervals - 1; i++)
             {
                 intervalStart = i * intervalDuration;
-                intervalEnd = min((i + 1) * intervalDuration - 1, secondsList.back());
+                intervalEnd = (i * intervalDuration) + intervalDuration;
 
                 int currentHour = intervalStart / 3600;
 
                 if (currentHour != previousHour)
                 {
-                    cout << endl; // Print new line only when a new hour starts
+                    if (totalSeconds / 3600 > currentHour)
+                    {
+                        cout << endl;
+                    }
                     previousHour = currentHour;
                 }
 
-                if (messageFrequency[i] > (averageFrequency * intervalDuration) * HSF)
+                if (func == 'h')
+                {
+                    compareValue = ((compareInterval[currentHour] / compareIntervalDuration) * intervalDuration) * HSF;
+                }
+                else
+                {
+                    compareValue = (averageFrequency * intervalDuration)* HSF;
+                }
+
+                if (messageFrequency[i] > compareValue)
                 {
                     cout << endl << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages ";
-
+               
                     const auto& topPhrasesInterval = topPhrases[i];
                     for (int j = 0; j < min(x, static_cast<int>(topPhrasesInterval.size())); j++)
                     {
@@ -295,6 +318,12 @@ int main()
                     }
                 }
             }
+            for (size_t i = 0; i < currentCompareInterval; i++)
+            {
+                cout << endl << "Interval [" << secondsToTime(i * compareIntervalDuration) << " - " << secondsToTime((i * compareIntervalDuration) + compareIntervalDuration) << "]: " << compareInterval[i] << " messages ";
+            }
+
+
             cout << endl << endl;
 		}
 
@@ -392,6 +421,7 @@ int main()
 
         }
 
+        compareInterval.clear();
         messages.clear();
         secondsList.clear();
         messageFrequency.clear();
