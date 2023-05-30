@@ -1,1 +1,1 @@
-TwitchDownloaderCLI.exe chatdownload --id c -o c.txt
+TwitchDownloaderCLI.exe chatdownload --id 1831747647 -o 1831747647.txt

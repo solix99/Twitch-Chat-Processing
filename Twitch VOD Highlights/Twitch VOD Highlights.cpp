@@ -80,7 +80,7 @@ int main()
     string searchMessage{ "" };
     string message{ "" };
     vector<string> mostUsedPhrase;
-    char func;
+    char func[2];
     double compareIntervalDuration = 3600;
 
     double HSF = HIGHLIGHT_STRENGTH_FACTOR;
@@ -95,11 +95,12 @@ int main()
         cout << "Enter VOD ID , highlight strength factor, and interval duration: ";
         cin >> fileName >> func;
         
-        if (func == 'c')
+        if (func[0] == 'c')
         {
-            cin >> HSF >> intervalDuration;
+            cin >> HSF >> intervalDuration >> func;
+            
         }
-        else if (func == 'd' || func == 'h')
+        else if (func[0] == 'd' || func[0] == 'h')
         {
 			fstream sFile("settings.txt", ios::in);
 			sFile >> HSF >> intervalDuration;
@@ -168,7 +169,7 @@ int main()
         int x = 10; // Number of top phrases to save
         int numMessages = secondsList.size();
         double averageFrequency = numMessages / (double)secondsList.back();
-        numIntervals = (numMessages*3 + intervalDuration - 1) / intervalDuration;
+        numIntervals = (numMessages + intervalDuration - 1) / intervalDuration;
         int errorIndex = -1;
         vector<string> mostUsedPhrase(numIntervals);
         vector<int> messageFrequency(numIntervals, 0);
@@ -181,7 +182,7 @@ int main()
 
         cout << "Average message frequency: " << averageFrequency * intervalDuration << " messages per interval" << endl;
 
-        if (func == 'c' || func == 'd' || func == 'h')
+        if (func[0] == 'c' || func[0] == 'd' || func[0] == 'h')
         {
             try {
 
@@ -278,7 +279,9 @@ int main()
             inFile.close();
 
             int previousHour = -1; // Initialize with an invalid hour
-            double compareValue = 0;
+
+            double compareValueH = 0;
+            double compareValueD = 0;
 
             for (int i = 0; i < numIntervals - 1; i++)
             {
@@ -296,38 +299,34 @@ int main()
                     previousHour = currentHour;
                 }
 
-                if (func == 'h')
-                {
-                    compareValue = ((compareInterval[currentHour] / compareIntervalDuration) * intervalDuration) * HSF;
-                }
-                else
-                {
-                    compareValue = (averageFrequency * intervalDuration)* HSF;
-                }
+                compareValueH = ((compareInterval[currentHour] / compareIntervalDuration) * intervalDuration) * HSF;
+                compareValueD = (averageFrequency * intervalDuration) * HSF;
 
-                if (messageFrequency[i] > compareValue)
-                {
-                    cout << endl << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages ";
-               
-                    const auto& topPhrasesInterval = topPhrases[i];
-                    for (int j = 0; j < min(x, static_cast<int>(topPhrasesInterval.size())); j++)
+                try {
+                    if (((messageFrequency[i] > compareValueH) && (func[1] == 'h' || func[0] == 'h')) || ((messageFrequency[i] > compareValueD) && func[0] == 'd'))
                     {
-                        const string& phrase = topPhrasesInterval[j];
-                        int phraseCount = intervalPhraseCounts[i][phrase];
-                        cout << phrase << "[" << phraseCount << "] ";
+                        cout << endl << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages ";
+
+                        const auto& topPhrasesInterval = topPhrases[i];
+                        for (int j = 0; j < min(x, static_cast<int>(topPhrasesInterval.size())); j++)
+                        {
+                            const string& phrase = topPhrasesInterval[j];
+                            int phraseCount = intervalPhraseCounts[i][phrase];
+                            cout << phrase << "[" << phraseCount << "] ";
+                        }
                     }
                 }
+                catch (const std::exception& e) {
+                    cout << "An error occurred: " << e.what() << endl;
+                }
+                catch (...) {
+                    cout << "An unknown error occurred." << endl;
+                }
             }
-            for (size_t i = 0; i < currentCompareInterval; i++)
-            {
-                cout << endl << "Interval [" << secondsToTime(i * compareIntervalDuration) << " - " << secondsToTime((i * compareIntervalDuration) + compareIntervalDuration) << "]: " << compareInterval[i] << " messages ";
-            }
-
-
             cout << endl << endl;
 		}
 
-        else if (func == 's')
+        else if (func[0] == 's')
         {
             // Declare and initialize intervalMessages
             vector<vector<string>> intervalMessages(numIntervals);
@@ -401,12 +400,11 @@ int main()
                         string intervalStartTime = secondsToTime(intervalSeconds);
                         string intervalEndTime = secondsToTime(intervalSeconds + intervalDuration - 1);
 
-                        cout << "Interval [" << intervalStartTime << " - " << intervalEndTime << "]: ";
-
                         if (i < intervalMessages.size())
                         {
                             for (const auto& message : intervalMessages.at(i))
                             {
+                                cout << "Interval [" << intervalStartTime << " - " << intervalEndTime << "]: ";
                                 cout << "   " << message << endl;
                             }
                         }
