@@ -1,6 +1,3 @@
-#define INTERVAL_DURATION 10;
-#define HIGHLIGHT_STRENGTH_FACTOR 2;
-
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -9,15 +6,83 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
-#include <Windows.h>
-#include <conio.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <chrono>
+#include <semaphore>
+#include <thread>
+#include <atomic>
+#include <memory_resource>
+
 
 using namespace std;
 
-string secondsToTime(int totalSeconds) {
+struct YourHashFunction
+{
+    size_t operator()(const string& str) const 
+    {
+        size_t hash = 0;
+        for (const char c : str) 
+        {
+            hash = (hash * 131) + c; // Modify the prime number as needed
+        }
+        return hash;
+    }
+};
+
+constexpr int INTERVAL_DURATION = 10;
+constexpr int HIGHLIGHT_STRENGTH_FACTOR = 2;
+constexpr int showPhraseCountAmmount = 10;
+
+const int PROCESS_THREAD_COUNT = 4;
+
+double HSF = HIGHLIGHT_STRENGTH_FACTOR;
+atomic<int> intervalDuration = INTERVAL_DURATION;
+
+long long hours, minutes, seconds;
+vector<double> intervals;
+
+std::atomic<int> messageCount{0};
+std::atomic<int> totalSeconds{0};
+std::atomic<int> intervalIndex{0};
+std::atomic<int> numIntervals{0};
+std::atomic<int> intervalStart{0};
+std::atomic<int> intervalEnd{0};
+std::atomic<int> currentInterval{0};
+
+vector<int> messageCounts;
+vector<double> secondsList; // list of seconds in each message
+vector<string> userMessages;
+string line, fileName, temp;
+stringstream fileDirectory{};
+ifstream inFile;
+int dec, intervalsShown{ 0 };
+string searchMessage{ "" };
+string message{ "" };
+vector<string> mostUsedPhrase;
+vector<string> ignoreList;
+char func[2];
+atomic<int> compareIntervalDuration = 3600;
+atomic<int> currentCompareInterval;
+
+int numMessages;
+double averageFrequency;
+int errorIndex = -1;
+vector<int> parts;
+atomic<int> endIndex[PROCESS_THREAD_COUNT];
+atomic<int> startIndex[PROCESS_THREAD_COUNT];
+vector<int> messageFrequency;
+vector<int> phraseCount;
+vector<unordered_map<string, int, YourHashFunction>> intervalPhraseCounts;
+unordered_map<string, int> phraseCountInterval;
+vector<vector<string>> topPhrases;
+atomic<int> compareInterval[50];
+thread processThread[PROCESS_THREAD_COUNT];
+counting_semaphore processDataSemaphore(PROCESS_THREAD_COUNT+1);
+
+
+string secondsToTime(int totalSeconds) 
+{
     int hours = totalSeconds / 3600;
     int minutes = (totalSeconds % 3600) / 60;
     int seconds = totalSeconds % 60;
@@ -30,62 +95,125 @@ string secondsToTime(int totalSeconds) {
     return ss.str();
 }
 
-inline bool exists_test0(const std::string& name) {
+inline bool exists_test0(const std::string& name) 
+{
     ifstream f(name.c_str());
     return f.good();
 }
 
 
-struct YourHashFunction {
-    size_t operator()(const string& str) const {
-        size_t hash = 0;
-        for (const char c : str) {
-            hash = (hash * 131) + c; // Modify the prime number as needed
-        }
-        return hash;
-    }
-};
+bool checkStringInVector(const std::string& str, const std::vector<std::string>& vec)
+{
+    std::unordered_set<std::string> strSet(vec.begin(), vec.end());
+    return strSet.find(str) != strSet.end();
+}
 
 std::chrono::high_resolution_clock::time_point startTime;
 
-void startTimer() {
+void startTimer() 
+{
     startTime = std::chrono::high_resolution_clock::now();
 }
 
-long long stopTimer() {
+void stopTimer(int threadIndex) 
+{
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-    return duration;
+    cout << endl<<"Task took:"<< duration << " ms." << "["<<threadIndex<<"]";
 }
 
 
+void processData(int threadIndex)
+{
+    startTimer();
+
+    //cout << endl << "Process started from:" << startIndex[threadIndex] << "-" << endIndex[threadIndex];
+
+    processDataSemaphore.acquire();
+
+    int threadIntervalDuration = intervalDuration;
+    int threadMessageFrequencySize = messageFrequency.size();
+    int threadStartIndex = startIndex[threadIndex];
+    int threadEndIndex = endIndex[threadIndex];
+    int threadCurrentInterval = secondsList[startIndex[threadIndex]] / threadIntervalDuration;
+    int nextIntervalDuration = (threadCurrentInterval + 1) * threadIntervalDuration;
+
+    processDataSemaphore.release();
+
+    for (int i = threadStartIndex; i < threadEndIndex; i++)
+    {
+        if (secondsList[i] >= nextIntervalDuration)
+        {
+            threadCurrentInterval++;
+
+           if (threadCurrentInterval >= threadMessageFrequencySize )
+           {
+               break;
+           }
+
+            nextIntervalDuration = (threadCurrentInterval + 1) * threadIntervalDuration;
+        }
+
+        messageFrequency[threadCurrentInterval]++;
+
+        string currentPhrase = userMessages[i];
+
+        auto& phraseCountMap = intervalPhraseCounts[threadCurrentInterval];
+        istringstream iss(currentPhrase);
+        string word;
+
+        while (iss >> word)
+        {
+            if (!checkStringInVector(word, ignoreList))
+            {
+                phraseCountMap[word]++; // Increment the count of each individual word/phrase
+            }
+            else
+            {
+                messageFrequency[threadCurrentInterval]--;
+            }
+        }
+
+        int currentPhraseCount = phraseCountMap[currentPhrase]; // Get the count of the current phrase
+
+        int& mostUsedPhraseCount = phraseCount[threadCurrentInterval]; // Get the count of the current most used phrase
+
+        // Update top phrases for the current interval
+        if (threadCurrentInterval < topPhrases.size())
+        {
+            auto& topPhrasesInterval = topPhrases[threadCurrentInterval];
+            unordered_map<string, int> phraseCountInterval; // Map to store phrase count within the interval
+
+            for (const auto& phrase : topPhrasesInterval)
+            {
+                phraseCountInterval[phrase] = phraseCountMap[phrase]; // Store the count of each top phrase within the interval
+            }
+
+            if (phraseCountInterval.find(currentPhrase) == phraseCountInterval.end())
+            {
+                currentPhrase = currentPhrase.substr(0, 10);
+                topPhrasesInterval.push_back(currentPhrase); // Add the current phrase to the top phrases if it's not already present
+                phraseCountInterval[currentPhrase] = currentPhraseCount; // Store its count within the interval
+            }
+
+            sort(topPhrasesInterval.begin(), topPhrasesInterval.end(), [&](const string& a, const string& b) {
+                return phraseCountInterval[a] > phraseCountInterval[b];
+                });
+
+            // Keep only the top X phrases
+            if (topPhrasesInterval.size() > showPhraseCountAmmount)
+            {
+                topPhrasesInterval.resize(showPhraseCountAmmount);
+            }
+        }
+    }
+    stopTimer(threadIndex);
+
+}
+
 int main()
 {
-    long long hours, minutes, seconds;
-    vector<double> intervals;
-    double messageCount{ 0 };
-    double totalSeconds{ 0 };
-    double intervalIndex{ 0 };
-    double numIntervals{ 0 };
-    double intervalStart{ 0 };
-    double intervalEnd{ 0 };
-    double currentInterval{ 0 };
-    vector<int> messageCounts;
-    vector<double> secondsList; // list of seconds in each message
-    vector<string> messages;
-    string line, fileName;
-    stringstream fileDirectory{};
-    ifstream inFile;
-    int dec, intervalsShown{ 0 };
-    string searchMessage{ "" };
-    string message{ "" };
-    vector<string> mostUsedPhrase;
-    char func[2];
-    double compareIntervalDuration = 3600;
-
-    double HSF = HIGHLIGHT_STRENGTH_FACTOR;
-    double intervalDuration = INTERVAL_DURATION;
-
+    cout << endl << intervalDuration;
     cout << endl << "s - search phrase, d - default values from settings.txt, h - defaults with a compareInterval value of 1 hour , c - custom values:" << endl <<endl;
 
     while (true)
@@ -93,17 +221,51 @@ int main()
         secondsList.clear();
 
         cout << "Enter VOD ID , highlight strength factor, and interval duration: ";
-        cin >> fileName >> func;
+        cin >> fileName;
+
+        if (fileName == "addignore")
+        {
+            fstream ignoreFile("ignore.txt", ios::out | ios::app);
+            string ignoreText[99];
+            size_t k = 0;
+            
+            while (cin >> ignoreText[k])
+            {
+                if (ignoreText[k] == "end") { break; };
+
+                ignoreFile << ignoreText[k] << ' ';
+
+                k++;
+            }
+
+            ignoreFile.close();
+
+            continue;
+        }
+        else
+        {
+            cin >> func;
+        }
+
+        fstream ignoreFile("ignore.txt", ios::in);
+        while (ignoreFile >> temp)
+        {
+            ignoreList.push_back(temp);
+        }
+        ignoreFile.close();
         
+        int tempIntervalDuration;
+
         if (func[0] == 'c')
         {
-            cin >> HSF >> intervalDuration >> func;
-            
+            cin >> HSF >> tempIntervalDuration >> func;
+            intervalDuration.store(tempIntervalDuration, memory_order_relaxed);
         }
         else if (func[0] == 'd' || func[0] == 'h')
         {
 			fstream sFile("settings.txt", ios::in);
-			sFile >> HSF >> intervalDuration;
+			sFile >> HSF >> tempIntervalDuration;
+            intervalDuration.store(tempIntervalDuration, memory_order_relaxed);
 			sFile.close();
 		}
 
@@ -133,6 +295,8 @@ int main()
         // Remove the first character from the input string
         line = line.substr(3);
 
+        startTimer();
+
         while (getline(inFile, line))
         {
             int result = sscanf_s(line.c_str(), "[%lld:%lld:%lld]", &hours, &minutes, &seconds);
@@ -157,124 +321,64 @@ int main()
             messageCount++;
 
             // Store username, message, and total seconds
-            messages.push_back(std::move(message));
+            userMessages.push_back(std::move(message));
             secondsList.push_back(totalSeconds);
 
         }
+        stopTimer(-1);
 
         inFile.close();
 
         currentInterval = 0;
-        int currentCompareInterval = 0;
-        int x = 10; // Number of top phrases to save
-        int numMessages = secondsList.size();
-        double averageFrequency = numMessages / (double)secondsList.back();
-        numIntervals = (numMessages + intervalDuration - 1) / intervalDuration;
-        int errorIndex = -1;
-        vector<string> mostUsedPhrase(numIntervals);
-        vector<int> messageFrequency(numIntervals, 0);
-        vector<int> phraseCount(numIntervals);
-        vector<unordered_map<string, int, YourHashFunction>> intervalPhraseCounts(numIntervals);
-        unordered_map<string, int> phraseCountInterval; // Map to store phrase count within the interval
-        vector<vector<string>> topPhrases(numIntervals); // Vector to store top X phrases for each interval
-        vector<int> compareInterval;
-        compareInterval.resize((totalSeconds/ compareIntervalDuration) * 10);
+        numIntervals = (totalSeconds) / intervalDuration;
+        currentCompareInterval = 0;
+        numMessages = secondsList.size();
+        averageFrequency = numMessages / (double)secondsList.back();
+        mostUsedPhrase.resize(numIntervals);
+        messageFrequency.resize(numIntervals,0);
+        phraseCount.resize(numIntervals);
+        intervalPhraseCounts.resize(numIntervals);
+        topPhrases.resize(numIntervals);
 
         cout << "Average message frequency: " << averageFrequency * intervalDuration << " messages per interval" << endl;
 
+        startIndex[0] = 0;
+
+        for (int i = 0; i < PROCESS_THREAD_COUNT; ++i)
+        {
+            if (i < numMessages % PROCESS_THREAD_COUNT)
+            {
+                parts.push_back(numMessages / PROCESS_THREAD_COUNT + 1);
+            }
+            else
+            {
+                parts.push_back(numMessages / PROCESS_THREAD_COUNT);
+            }
+            startIndex[i + 1] = startIndex[i] + parts[i];
+            endIndex[i] = startIndex[i] + parts[i];
+        }
+
         if (func[0] == 'c' || func[0] == 'd' || func[0] == 'h')
         {
-            try {
-
-                for (int i = 0; i < numMessages; i++)
+            try
+            {
+                for (size_t i = 0; i < PROCESS_THREAD_COUNT; i++)
                 {
-                    if (secondsList[i] >= (currentInterval + 1) * intervalDuration)
-                    {
-                        currentInterval++;
-                        if (currentInterval >= messageFrequency.size() || currentInterval >= intervalPhraseCounts.size() || currentInterval >= phraseCount.size() || currentInterval >= mostUsedPhrase.size() || currentInterval >= topPhrases.size())
-                        {
-                            // Handle vector size mismatch or out of range access
-                            errorIndex = i;
-                            throw std::out_of_range("Vector out of range error: Current Interval exceeds vector sizes");
-                        }
-                    }
-                    if (secondsList[i] >= (currentCompareInterval + 1) * compareIntervalDuration)
-                    {
-                        currentCompareInterval++;
-                    }
-                    messageFrequency[currentInterval]++;
-                    compareInterval[currentCompareInterval]++;
+                    processThread[i] = thread(processData, i);
+                }
 
-                    string currentPhrase = messages[i];
-
-                    auto& phraseCountMap = intervalPhraseCounts[currentInterval];
-                    istringstream iss(currentPhrase);
-                    string word;
-                    while (iss >> word)
-                    {
-                        phraseCountMap[word]++; // Increment the count of each individual word/phrase
-                    }
-
-                    int currentPhraseCount = phraseCountMap[currentPhrase]; // Get the count of the current phrase
-                    if (currentInterval >= phraseCount.size() || currentInterval >= mostUsedPhrase.size())
-                    {
-                        // Handle vector size mismatch or out of range access
-                        errorIndex = i;
-                        throw std::out_of_range("Vector out of range error: Current Interval exceeds vector sizes");
-                    }
-                    int& mostUsedPhraseCount = phraseCount[currentInterval]; // Get the count of the current most used phrase
-
-                    if (currentPhraseCount > mostUsedPhraseCount)
-                    {
-                        mostUsedPhraseCount = currentPhraseCount; // Update the count of the most used phrase
-                        mostUsedPhrase[currentInterval] = currentPhrase; // Update the most used phrase
-                    }
-
-                    // Update top phrases for the current interval
-                    if (currentInterval >= topPhrases.size())
-                    {
-                        // Handle vector size mismatch or out of range access
-                        errorIndex = i;
-                        throw std::out_of_range("Vector out of range error: Current Interval exceeds vector sizes");
-                    }
-                    auto& topPhrasesInterval = topPhrases[currentInterval];
-                    unordered_map<string, int> phraseCountInterval; // Map to store phrase count within the interval
-
-                    for (const auto& phrase : topPhrasesInterval)
-                    {
-                        phraseCountInterval[phrase] = phraseCountMap[phrase]; // Store the count of each top phrase within the interval
-                    }
-
-                    if (phraseCountInterval.find(currentPhrase) == phraseCountInterval.end())
-                    {
-                        currentPhrase = currentPhrase.substr(0, 10);
-                        topPhrasesInterval.push_back(currentPhrase); // Add the current phrase to the top phrases if it's not already present
-                        phraseCountInterval[currentPhrase] = currentPhraseCount; // Store its count within the interval
-                    }
-
-                    // Sort the top phrases in descending order of counts
-                    sort(topPhrasesInterval.begin(), topPhrasesInterval.end(), [&](const string& a, const string& b) {
-                        return phraseCountInterval[a] > phraseCountInterval[b];
-                        });
-
-                    // Keep only the top X phrases
-                    if (topPhrasesInterval.size() > x)
-                    {
-                        topPhrasesInterval.resize(x);
-                    }
+                for (size_t i = 0; i < PROCESS_THREAD_COUNT; i++)
+                {
+                    processThread[i].join();
                 }
             }
             catch (const std::out_of_range& e) {
-                std::cout << "Error occurred at index " << errorIndex << ": " << e.what() << ": " << messages[errorIndex] << std::endl;
+                std::cout << "Error occurred at index " << errorIndex << ": " << e.what() << ": " << userMessages[errorIndex] << std::endl;
             }
             catch (const std::exception& e) {
                 std::cout << "Exception occurred: " << e.what() << std::endl;
             }
-
-            messageFrequency.reserve(numIntervals);
-            mostUsedPhrase.reserve(numIntervals);
-            phraseCount.reserve(numIntervals);
-            intervalPhraseCounts.reserve(numIntervals);
+            numIntervals = (totalSeconds) / intervalDuration;
 
             inFile.close();
 
@@ -282,6 +386,7 @@ int main()
 
             double compareValueH = 0;
             double compareValueD = 0;
+
 
             for (int i = 0; i < numIntervals - 1; i++)
             {
@@ -308,7 +413,7 @@ int main()
                         cout << endl << "Interval [" << secondsToTime(intervalStart) << " - " << secondsToTime(intervalEnd) << "]: " << messageFrequency[i] << " messages ";
 
                         const auto& topPhrasesInterval = topPhrases[i];
-                        for (int j = 0; j < min(x, static_cast<int>(topPhrasesInterval.size())); j++)
+                        for (int j = 0; j < min(showPhraseCountAmmount, static_cast<int>(topPhrasesInterval.size())); j++)
                         {
                             const string& phrase = topPhrasesInterval[j];
                             int phraseCount = intervalPhraseCounts[i][phrase];
@@ -347,9 +452,9 @@ int main()
                         messageFrequency.at(intervalIndex)++;
 
                     // Get the message text
-                    if (i < messages.size())
+                    if (i < userMessages.size())
                     {
-                        string message = messages.at(i);
+                        string message = userMessages.at(i);
 
                         // Check if the search phrase is present in the message
                         if (message.find(searchPhrase) != string::npos)
@@ -419,14 +524,17 @@ int main()
 
         }
 
-        compareInterval.clear();
-        messages.clear();
+        userMessages.clear();
         secondsList.clear();
         messageFrequency.clear();
         mostUsedPhrase.clear();
         phraseCount.clear();
         intervalPhraseCounts.clear();
+        topPhrases.clear();
+        phraseCountInterval.clear();
+        intervalPhraseCounts.clear();
 
     }
     return 0;
 }
+
