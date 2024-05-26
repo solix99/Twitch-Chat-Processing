@@ -293,10 +293,10 @@ bool getArgs(const std::string& line)
     std::string word;
     iss >> word;
 
-    if (isInteger(word))
-    {
-        MEM.INPUT_FILE_NAME = word + ".txt";
-    }
+
+   
+    MEM.INPUT_FILE_NAME = word + ".txt";
+    
 
     while (iss >> word)
     {
